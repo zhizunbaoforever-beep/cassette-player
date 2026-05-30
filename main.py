@@ -146,25 +146,6 @@ class CassettePlayer(QWidget):
         self.setWindowTitle("Cassette Player")
         self.setStyleSheet("background: transparent;")
 
-        # 打开文件夹按钮（顶部）
-        self.btn_open = QPushButton("+ 打开音乐文件夹", self)
-        self.btn_open.setGeometry(250, 12, 180, 28)
-        self.btn_open.setStyleSheet("""
-            QPushButton {
-                background: rgba(255,255,255,0.12);
-                color: #ccc;
-                border: 1px solid rgba(255,255,255,0.2);
-                border-radius: 14px;
-                font-size: 13px;
-                padding: 4px 12px;
-            }
-            QPushButton:hover {
-                background: rgba(255,255,255,0.25);
-                color: #fff;
-            }
-        """)
-        self.btn_open.clicked.connect(self._open_folder)
-
         # 歌曲信息标签
         self.lbl_title = QLabel("未播放", self)
         self.lbl_title.setGeometry(80, 96, 520, 28)
@@ -284,25 +265,42 @@ class CassettePlayer(QWidget):
         p.setPen(QPen(QColor(255, 255, 255, 30), 1))
         p.drawPath(path2)
 
-        # 顶部高光
-        grad = QLinearGradient(0, margin, 0, margin + 80)
-        grad.setColorAt(0, QColor(255, 255, 255, 100))
-        grad.setColorAt(1, QColor(255, 255, 255, 0))
-        p.fillRect(QRectF(margin + 30, margin + 3, bw - 60, 75), grad)
+        # --- 标签区（凸起效果：阴影 + 顶部高光边） ---
+        label_y = margin + 10
+        label_h = 64
+        label_rect = QRectF(margin + 26, label_y, bw - 52, label_h)
 
-        # --- 标签区 ---
-        label_y = margin + 8
-        label_h = 68
+        # 底部阴影（标签投射在机身上的影子）
+        shadow_path = QPainterPath()
+        shadow_path.addRoundedRect(QRectF(label_rect.adjusted(0, 3, 0, 4)), 8, 8)
+        p.fillPath(shadow_path, QColor(0, 0, 0, 40))
+
+        # 标签主体
         label_path = QPainterPath()
-        label_path.addRoundedRect(QRectF(margin + 26, label_y, bw - 52, label_h), 8, 8)
-        p.fillPath(label_path, QColor(70, 62, 48, 130))
-        p.setPen(QPen(QColor(190, 180, 150, 80), 1))
+        label_path.addRoundedRect(label_rect, 8, 8)
+        p.fillPath(label_path, QColor(72, 64, 50, 160))
+        p.setPen(QPen(QColor(180, 170, 140, 90), 1))
         p.drawPath(label_path)
 
+        # 顶部高光边（光打在凸起边缘）
+        highlight_rect = QRectF(label_rect.adjusted(2, 1, -2, -label_h + 6))
+        hl_path = QPainterPath()
+        hl_path.addRoundedRect(highlight_rect, 6, 6)
+        p.fillPath(hl_path, QColor(255, 255, 255, 35))
+
+        # 全局顶部高光（玻璃反光，精确匹配贴纸区域）
+        grad = QLinearGradient(0, label_y, 0, label_y + label_h)
+        grad.setColorAt(0, QColor(255, 255, 255, 100))
+        grad.setColorAt(0.3, QColor(255, 255, 255, 30))
+        grad.setColorAt(1, QColor(255, 255, 255, 0))
+        hl_global = QPainterPath()
+        hl_global.addRoundedRect(label_rect, 8, 8)
+        p.fillPath(hl_global, grad)
+
         # 标签横线
-        p.setPen(QPen(QColor(210, 200, 170, 60), 1))
+        p.setPen(QPen(QColor(200, 190, 160, 50), 1))
         for i in range(2):
-            ly = label_y + 24 + i * 20
+            ly = label_y + 22 + i * 20
             p.drawLine(int(margin + 42), ly, int(w - margin - 42), ly)
 
         # --- 磁带轮 ---
@@ -317,18 +315,35 @@ class CassettePlayer(QWidget):
 
         # --- 四角螺丝 ---
         screw_r = 7
-        for sx, sy in [(margin + 14, margin + 14),
-                       (w - margin - 14, margin + 14),
-                       (margin + 14, cassette_bottom - 14),
-                       (w - margin - 14, cassette_bottom - 14)]:
+        screw_positions = [
+            (margin + 14, margin + 14),                     # 左上：+
+            (w - margin - 14, margin + 14),                 # 右上：✕
+            (margin + 14, cassette_bottom - 14),            # 左下：装饰
+            (w - margin - 14, cassette_bottom - 14),        # 右下：装饰
+        ]
+        self._screw_positions = screw_positions  # 供点击检测
+
+        for idx, (sx, sy) in enumerate(screw_positions):
+            # 外圈
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor(165, 170, 180, 170))
             p.drawEllipse(QPointF(sx, sy), screw_r, screw_r)
+            # 内圈
             p.setBrush(QColor(135, 140, 150, 190))
             p.drawEllipse(QPointF(sx, sy), screw_r - 3, screw_r - 3)
-            p.setPen(QPen(QColor(100, 105, 115, 150), 1))
-            p.drawLine(int(sx - 2), int(sy), int(sx + 2), int(sy))
-            p.drawLine(int(sx), int(sy - 2), int(sx), int(sy + 2))
+
+            if idx == 0:  # 左上：+
+                p.setPen(QPen(QColor(220, 225, 235, 200), 2))
+                p.drawLine(int(sx - 3), int(sy), int(sx + 3), int(sy))
+                p.drawLine(int(sx), int(sy - 3), int(sx), int(sy + 3))
+            elif idx == 1:  # 右上：✕
+                p.setPen(QPen(QColor(220, 225, 235, 200), 2))
+                p.drawLine(int(sx - 2), int(sy - 2), int(sx + 2), int(sy + 2))
+                p.drawLine(int(sx + 2), int(sy - 2), int(sx - 2), int(sy + 2))
+            else:  # 左下、右下：螺丝槽
+                p.setPen(QPen(QColor(100, 105, 115, 150), 1))
+                p.drawLine(int(sx - 2), int(sy), int(sx + 2), int(sy))
+                p.drawLine(int(sx), int(sy - 2), int(sx), int(sy + 2))
 
         # === 频谱音浪（磁带机身内部底部，宽度对齐两磁带轮外边缘） ===
         # 复用磁带轮的水平位置
@@ -500,8 +515,20 @@ class CassettePlayer(QWidget):
         self.lbl_artist.setText("请打开音乐文件夹")
 
     def mousePressEvent(self, event):
-        """记录拖拽起始位置"""
+        """处理螺丝点击 或 拖拽起始"""
         if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position()
+            # 检查是否点击了功能螺丝
+            if hasattr(self, '_screw_positions'):
+                for idx, (sx, sy) in enumerate(self._screw_positions):
+                    dist = ((pos.x() - sx) ** 2 + (pos.y() - sy) ** 2) ** 0.5
+                    if dist <= 12:  # 点击半径稍大于视觉半径
+                        if idx == 0:    # 左上：打开文件夹
+                            self._open_folder()
+                        elif idx == 1:  # 右上：关闭窗口
+                            self.window().close()
+                        return
+            # 否则开始拖拽
             self._drag_start = event.globalPosition().toPoint()
 
     def mouseMoveEvent(self, event):
