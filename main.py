@@ -203,12 +203,13 @@ class CassettePlayer(QWidget):
         w, h = self.width(), self.height()
         base_w = 680
         s = w / base_w  # 缩放比
-        btn_s = int(44 * s)  # 按钮尺寸
+        btn_s = int(48 * s)  # 按钮尺寸
+        reel_s = int(170 * s)
 
-        # 按钮位置：居中于 reel 高度
+        # 按钮 Y 对齐 reel 中心
         ry = self._reel_center_y()
         bw = btn_s
-        spacing = int(96 * s)
+        spacing = int(reel_s * 0.50)  # 按钮更靠近中心，远离 reel
         center_x = w // 2
         self.btn_prev.setGeometry(center_x - spacing - bw // 2, ry - bw // 2, bw, bw)
         self.btn_play.setGeometry(center_x - bw // 2, ry - bw // 2, bw, bw)
@@ -591,18 +592,9 @@ class CassettePlayer(QWidget):
         """处理 角缩放 / 螺丝点击 / 拖拽"""
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position()
-            # 1. 角缩放优先（角落 30px 区域）
-            corner = self._corner_at(pos)
-            if corner is not None:
-                self._resize_corner = corner
-                self._resize_start = event.globalPosition().toPoint()
-                self._resize_geom = self.window().geometry()
-                self._resize_min = self.window().minimumSize()
-                self.grabMouse()
-                return
-            # 2. 功能螺丝（仅左上 + 和右上 ✕）
+            # 1. 功能螺丝优先（左上 + 和右上 ✕）
             if hasattr(self, '_screw_positions'):
-                r = int(10 * self.width() / 680)  # 缩放检测半径
+                r = 14  # 固定像素，不随缩放变小
                 for idx in (0, 1):
                     sx, sy = self._screw_positions[idx]
                     dist = ((pos.x() - sx) ** 2 + (pos.y() - sy) ** 2) ** 0.5
@@ -612,6 +604,15 @@ class CassettePlayer(QWidget):
                         else:
                             self.window().close()
                         return
+            # 2. 角缩放（角落 30px）
+            corner = self._corner_at(pos)
+            if corner is not None:
+                self._resize_corner = corner
+                self._resize_start = event.globalPosition().toPoint()
+                self._resize_geom = self.window().geometry()
+                self._resize_min = self.window().minimumSize()
+                self.grabMouse()
+                return
             # 3. 拖拽移动
             self._drag_start = event.globalPosition().toPoint()
 
