@@ -129,6 +129,7 @@ class CassettePlayer(QWidget):
         self._bars = [0.05] * self._bar_count
         self._bar_targets = [0.05] * self._bar_count
         self._bar_frame = 0
+        self._drag_start = None
 
         # 动画定时器
         self._anim_timer = QTimer(self)
@@ -498,6 +499,18 @@ class CassettePlayer(QWidget):
         self.lbl_title.setText("未播放")
         self.lbl_artist.setText("请打开音乐文件夹")
 
+    def mousePressEvent(self, event):
+        """记录拖拽起始位置"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = event.globalPosition().toPoint()
+
+    def mouseMoveEvent(self, event):
+        """无边框窗口拖拽"""
+        if self._drag_start is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            delta = event.globalPosition().toPoint() - self._drag_start
+            self.window().move(self.window().pos() + delta)
+            self._drag_start = event.globalPosition().toPoint()
+
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Space:
             self._play_pause()
@@ -520,8 +533,8 @@ class CassettePlayer(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Cassette Player")
         self.setFixedSize(680, 520)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent;")
 
