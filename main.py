@@ -129,6 +129,7 @@ class CassettePlayer(QWidget):
         self._bars = [0.05] * self._bar_count
         self._bar_targets = [0.05] * self._bar_count
         self._bar_frame = 0
+        self._hue_offset = 0.0
         self._drag_start = None
 
         # 动画定时器
@@ -142,20 +143,24 @@ class CassettePlayer(QWidget):
         self._restore_state()
 
     def _setup_ui(self):
-        self.setMinimumSize(680, 520)
-        self.setWindowTitle("Cassette Player")
+        self.setMinimumSize(500, 400)
+        self.setMouseTracking(True)
         self.setStyleSheet("background: transparent;")
+
+        _base_w, _base_h = 680, 520  # 设计基准尺寸
 
         # 歌曲信息标签
         self.lbl_title = QLabel("未播放", self)
-        self.lbl_title.setGeometry(80, 96, 520, 28)
-        self.lbl_title.setStyleSheet("color: #fff; font-size: 18px; font-weight: bold; background: transparent;")
+        self.lbl_title.setStyleSheet(
+            "color: #fff; font-size: 18px; font-weight: bold; background: transparent;")
         self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         self.lbl_artist = QLabel("请打开音乐文件夹", self)
-        self.lbl_artist.setGeometry(80, 122, 520, 22)
-        self.lbl_artist.setStyleSheet("color: #aaa; font-size: 14px; background: transparent;")
+        self.lbl_artist.setStyleSheet(
+            "color: #aaa; font-size: 14px; background: transparent;")
         self.lbl_artist.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_artist.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         # 按钮
         btn_style = """
@@ -165,8 +170,8 @@ class CassettePlayer(QWidget):
                 border: 2px solid rgba(255,255,255,0.25);
                 border-radius: 24px;
                 font-size: 22px;
-                min-width: 48px;
-                min-height: 48px;
+                min-width: 40px;
+                min-height: 40px;
             }
             QPushButton:hover {
                 background: rgba(255,255,255,0.25);
@@ -177,40 +182,58 @@ class CassettePlayer(QWidget):
                 background: rgba(255,255,255,0.35);
             }
         """
-
-        # 按钮Y：与磁带轮中心对齐
-        btn_h = 48
-        btn_y = self._reel_center_y() - btn_h // 2
-
         self.btn_prev = QPushButton("⏮", self)
-        self.btn_prev.setGeometry(220, btn_y, 48, 48)
         self.btn_prev.setStyleSheet(btn_style)
         self.btn_prev.clicked.connect(self._prev)
 
         self.btn_play = QPushButton("▶", self)
-        self.btn_play.setGeometry(316, btn_y, 48, 48)
         self.btn_play.setStyleSheet(btn_style)
         self.btn_play.clicked.connect(self._play_pause)
 
         self.btn_next = QPushButton("⏭", self)
-        self.btn_next.setGeometry(412, btn_y, 48, 48)
         self.btn_next.setStyleSheet(btn_style)
         self.btn_next.clicked.connect(self._next)
 
         # 文件列表（隐藏的）
         self._file_list = []
 
+    def resizeEvent(self, event):
+        """窗口缩放时重排子控件位置"""
+        super().resizeEvent(event)
+        w, h = self.width(), self.height()
+        base_w = 680
+        s = w / base_w  # 缩放比
+        btn_s = int(44 * s)  # 按钮尺寸
+
+        # 按钮位置：居中于 reel 高度
+        ry = self._reel_center_y()
+        bw = btn_s
+        spacing = int(96 * s)
+        center_x = w // 2
+        self.btn_prev.setGeometry(center_x - spacing - bw // 2, ry - bw // 2, bw, bw)
+        self.btn_play.setGeometry(center_x - bw // 2, ry - bw // 2, bw, bw)
+        self.btn_next.setGeometry(center_x + spacing - bw // 2, ry - bw // 2, bw, bw)
+        # 标签位置
+        lw = int(520 * s)
+        self.lbl_title.setGeometry(int(80 * s), int(96 * s), lw, int(28 * s))
+        self.lbl_title.setStyleSheet(
+            f"color: #fff; font-size: {max(10, int(16*s))}px; font-weight: bold; background: transparent;")
+        self.lbl_artist.setGeometry(int(80 * s), int(122 * s), lw, int(22 * s))
+        self.lbl_artist.setStyleSheet(
+            f"color: #aaa; font-size: {max(9, int(13*s))}px; background: transparent;")
+
     def _reel_center_y(self):
-        """计算磁带轮中心 Y 坐标（动态适配，音浪上方）"""
-        margin = 18
-        label_y = margin + 8
-        label_h = 68
-        waveform_max_h = 68
-        waveform_base_offset = 24
+        """计算磁带轮中心 Y 坐标（动态适配）"""
+        w = self.width()
+        s = w / 680
+        margin = int(18 * s)
+        label_y = margin + int(8 * s)
+        label_h = int(68 * s)
+        waveform_max_h = int(68 * s)
+        waveform_base_offset = int(24 * s)
         cassette_bottom = self.height() - margin
         waveform_top = cassette_bottom - waveform_base_offset - waveform_max_h
-        label_bottom = label_y + label_h
-        return label_bottom + (waveform_top - label_bottom) // 2
+        return label_y + label_h + (waveform_top - label_y - label_h) // 2
 
     # ================================================================
     # 动画
@@ -234,6 +257,8 @@ class CassettePlayer(QWidget):
         # 平滑插值到目标
         for i in range(self._bar_count):
             self._bars[i] += (self._bar_targets[i] - self._bars[i]) * 0.18
+        # 色相持续流动
+        self._hue_offset = (self._hue_offset + 0.003) % 1.0
         self.update()  # 重绘
 
     # ================================================================
@@ -246,8 +271,10 @@ class CassettePlayer(QWidget):
 
         w, h = self.width(), self.height()
 
-        # 布局常量
-        margin = 18
+        # 布局常量（基于宽度比例缩放）
+        base_w = 680
+        s = w / base_w
+        margin = int(18 * s)
         cassette_bottom = h - margin
         bw = w - margin * 2
         bh = h - margin * 2
@@ -266,17 +293,16 @@ class CassettePlayer(QWidget):
         p.drawPath(path2)
 
         # --- 标签区（梯形 + 凸起效果） ---
-        label_y = margin + 10
-        label_h = 64
-        # 梯形：上宽下窄
-        slant = 10
-        tl_x = margin + 26        # 左上 x
-        tr_x = w - margin - 26     # 右上 x
-        bl_x = tl_x + slant        # 左下 x（内收）
-        br_x = tr_x - slant        # 右下 x（内收）
+        label_y = margin + int(10 * s)
+        label_h = int(64 * s)
+        slant = int(10 * s)
+        tl_x = margin + int(26 * s)
+        tr_x = w - margin - int(26 * s)
+        bl_x = tl_x + slant
+        br_x = tr_x - slant
         top_y = label_y
         bottom_y = label_y + label_h
-        r = 8  # 圆角半径
+        cr = int(8 * s)  # 圆角半径
 
         def _rounded_trapezoid(tlx, trx, blx, brx, ty, by, radius):
             """创建圆角梯形路径"""
@@ -294,19 +320,20 @@ class CassettePlayer(QWidget):
             return path
 
         # 底部阴影
-        shadow_path = _rounded_trapezoid(tl_x + 2, tr_x - 2, bl_x, br_x,
-                                         top_y + 3, bottom_y + 4, r)
+        shadow_path = _rounded_trapezoid(tl_x + int(2*s), tr_x - int(2*s), bl_x, br_x,
+                                         top_y + int(3*s), bottom_y + int(4*s), cr)
         p.fillPath(shadow_path, QColor(0, 0, 0, 40))
 
         # 标签主体
-        label_path = _rounded_trapezoid(tl_x, tr_x, bl_x, br_x, top_y, bottom_y, r)
+        label_path = _rounded_trapezoid(tl_x, tr_x, bl_x, br_x, top_y, bottom_y, cr)
         p.fillPath(label_path, QColor(72, 64, 50, 160))
         p.setPen(QPen(QColor(180, 170, 140, 90), 1))
         p.drawPath(label_path)
 
         # 顶部高光边
-        hl_path = _rounded_trapezoid(tl_x + 2, tr_x - 2, bl_x + 4, br_x - 4,
-                                     top_y + 1, top_y + 8, 5)
+        hl_path = _rounded_trapezoid(tl_x + int(2*s), tr_x - int(2*s),
+                                     bl_x + int(4*s), br_x - int(4*s),
+                                     top_y + int(1*s), top_y + int(8*s), int(5*s))
         p.fillPath(hl_path, QColor(255, 255, 255, 35))
 
         # 全局玻璃反光（与梯形贴纸精确重合）
@@ -314,7 +341,7 @@ class CassettePlayer(QWidget):
         grad.setColorAt(0, QColor(255, 255, 255, 100))
         grad.setColorAt(0.3, QColor(255, 255, 255, 30))
         grad.setColorAt(1, QColor(255, 255, 255, 0))
-        hl_global = _rounded_trapezoid(tl_x, tr_x, bl_x, br_x, top_y, bottom_y, r)
+        hl_global = _rounded_trapezoid(tl_x, tr_x, bl_x, br_x, top_y, bottom_y, cr)
         p.fillPath(hl_global, grad)
 
         # 标签横线
@@ -324,9 +351,9 @@ class CassettePlayer(QWidget):
             p.drawLine(int(bl_x + 16), ly, int(br_x - 16), ly)
 
         # --- 磁带轮 ---
-        reel_r = 44
+        reel_r = int(44 * s)
         reel_y = self._reel_center_y()
-        reel_spacing = 170
+        reel_spacing = int(170 * s)
         r1_x = w // 2 - reel_spacing
         r2_x = w // 2 + reel_spacing
 
@@ -334,68 +361,71 @@ class CassettePlayer(QWidget):
             self._draw_reel(p, cx, reel_y, reel_r)
 
         # --- 四角螺丝 ---
-        screw_r = 7
+        screw_r = int(7 * s)
+        screw_off = int(14 * s)
         screw_positions = [
-            (margin + 14, margin + 14),                     # 左上：+
-            (w - margin - 14, margin + 14),                 # 右上：✕
-            (margin + 14, cassette_bottom - 14),            # 左下：装饰
-            (w - margin - 14, cassette_bottom - 14),        # 右下：装饰
+            (margin + screw_off, margin + screw_off),
+            (w - margin - screw_off, margin + screw_off),
+            (margin + screw_off, cassette_bottom - screw_off),
+            (w - margin - screw_off, cassette_bottom - screw_off),
         ]
         self._screw_positions = screw_positions  # 供点击检测
 
         for idx, (sx, sy) in enumerate(screw_positions):
-            # 外圈
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor(165, 170, 180, 170))
             p.drawEllipse(QPointF(sx, sy), screw_r, screw_r)
-            # 内圈
             p.setBrush(QColor(135, 140, 150, 190))
-            p.drawEllipse(QPointF(sx, sy), screw_r - 3, screw_r - 3)
+            p.drawEllipse(QPointF(sx, sy), screw_r - int(3 * s), screw_r - int(3 * s))
 
-            if idx == 0:  # 左上：+
-                p.setPen(QPen(QColor(220, 225, 235, 200), 2))
-                p.drawLine(int(sx - 3), int(sy), int(sx + 3), int(sy))
-                p.drawLine(int(sx), int(sy - 3), int(sx), int(sy + 3))
-            elif idx == 1:  # 右上：✕
-                p.setPen(QPen(QColor(220, 225, 235, 200), 2))
-                p.drawLine(int(sx - 2), int(sy - 2), int(sx + 2), int(sy + 2))
-                p.drawLine(int(sx + 2), int(sy - 2), int(sx - 2), int(sy + 2))
-            else:  # 左下、右下：螺丝槽
+            lw = int(2 * s)
+            if idx == 0:
+                p.setPen(QPen(QColor(220, 225, 235, 200), max(1, lw)))
+                d = int(3 * s)
+                p.drawLine(int(sx - d), int(sy), int(sx + d), int(sy))
+                p.drawLine(int(sx), int(sy - d), int(sx), int(sy + d))
+            elif idx == 1:
+                p.setPen(QPen(QColor(220, 225, 235, 200), max(1, lw)))
+                d = int(2 * s)
+                p.drawLine(int(sx - d), int(sy - d), int(sx + d), int(sy + d))
+                p.drawLine(int(sx + d), int(sy - d), int(sx - d), int(sy + d))
+            else:
                 p.setPen(QPen(QColor(100, 105, 115, 150), 1))
-                p.drawLine(int(sx - 2), int(sy), int(sx + 2), int(sy))
-                p.drawLine(int(sx), int(sy - 2), int(sx), int(sy + 2))
+                p.drawLine(int(sx - d), int(sy), int(sx + d), int(sy))
+                p.drawLine(int(sx), int(sy - d), int(sx), int(sy + d))
 
-        # === 频谱音浪（磁带机身内部底部，宽度对齐两磁带轮外边缘） ===
-        # 复用磁带轮的水平位置
-        reel_r = 44
-        reel_spacing = 170
-        wave_start_x = (w // 2 - reel_spacing) - reel_r   # 左轮左边缘
-        wave_end_x = (w // 2 + reel_spacing) + reel_r     # 右轮右边缘
+        # === 频谱音浪 ===
+        wave_start_x = (w // 2 - reel_spacing) - reel_r
+        wave_end_x = (w // 2 + reel_spacing) + reel_r
         wave_total_w = wave_end_x - wave_start_x
 
-        bar_w = 5
-        bar_gap = 2
-        bar_count = (wave_total_w + bar_gap) // (bar_w + bar_gap)
-        self._bar_count = min(bar_count, len(self._bars))  # 不超过预分配容量
-        actual_total_w = self._bar_count * (bar_w + bar_gap) - bar_gap
-        start_x = wave_start_x + (wave_total_w - actual_total_w) // 2
+        bar_count = min(60, len(self._bars))
+        self._bar_count = bar_count
+        cell_w = wave_total_w / bar_count  # 每格宽度（浮点）
+        bar_w = max(2.0, cell_w * 0.7)     # 柱宽占格宽 70%
+        bar_gap = cell_w - bar_w
 
-        waveform_max_h = 68
-        waveform_base_offset = 24
+        waveform_max_h = int(68 * s)
+        waveform_base_offset = int(24 * s)
         base_y = cassette_bottom - waveform_base_offset
         max_bar_h = waveform_max_h
 
+        # 先绘制整体炫光背景
+        glow_grad = QLinearGradient(0, base_y - max_bar_h, 0, base_y)
+        glow_grad.setColorAt(0, QColor(255, 255, 255, 0))
+        glow_grad.setColorAt(1, QColor(255, 255, 255, 0))
         p.setPen(Qt.PenStyle.NoPen)
+
         for i in range(self._bar_count):
-            t = self._bars[i]  # 0.0 ~ 1.0
+            t = self._bars[i]
             bar_h = max(2, int(t * max_bar_h))
-            bx = start_x + i * (bar_w + bar_gap)
+            bx = wave_start_x + i * cell_w
             by = base_y - bar_h
 
-            # 彩虹频谱：色相从左到右渐变，亮度随高度变化
-            hue = i / self._bar_count          # 0.0 → 1.0 全色相
-            sat = 0.90
-            val = 0.5 + t * 0.5               # 基准更亮，确保低柱可见
+            # 流动色相：位置基色 + 时间偏移
+            hue = (i / self._bar_count + self._hue_offset) % 1.0
+            sat = 1.0
+            val = 0.75 + t * 0.25
             # HSV → RGB
             chroma = val * sat
             h6 = hue * 6
@@ -416,10 +446,19 @@ class CassettePlayer(QWidget):
             r = int((rf + cm) * 255)
             g = int((gf + cm) * 255)
             b = int((bf + cm) * 255)
-            a = int(160 + t * 95)
 
-            p.setBrush(QColor(r, g, b, a))
+            # 外层炫光（宽而极其透明）
+            p.setBrush(QColor(r, g, b, 30))
+            p.drawRoundedRect(QRectF(bx - 3, by - 6, bar_w + 6, bar_h + 10), 6, 6)
+            # 中层光晕
+            p.setBrush(QColor(r, g, b, 80))
+            p.drawRoundedRect(QRectF(bx - 1, by - 3, bar_w + 2, bar_h + 5), 4, 4)
+            # 主体色柱
+            p.setBrush(QColor(r, g, b, 240))
             p.drawRoundedRect(QRectF(bx, by, bar_w, bar_h), 2, 2)
+            # 顶部高亮
+            p.setBrush(QColor(min(r + 80, 255), min(g + 80, 255), min(b + 80, 255), 200))
+            p.drawRoundedRect(QRectF(bx, by, bar_w, max(3, int(bar_h * 0.25))), 2, 2)
 
     def _draw_reel(self, p, cx, cy, r):
         """画一个磁带轮（带旋转）"""
@@ -534,29 +573,91 @@ class CassettePlayer(QWidget):
         self.lbl_title.setText("未播放")
         self.lbl_artist.setText("请打开音乐文件夹")
 
+    def _corner_at(self, pos):
+        """检测鼠标在哪个角：TL=0, TR=1, BL=2, BR=3，无=None"""
+        z = 30  # 角落检测范围
+        w, h = self.width(), self.height()
+        if pos.x() < z and pos.y() < z:
+            return 0  # TL
+        if pos.x() > w - z and pos.y() < z:
+            return 1  # TR
+        if pos.x() < z and pos.y() > h - z:
+            return 2  # BL
+        if pos.x() > w - z and pos.y() > h - z:
+            return 3  # BR
+        return None
+
     def mousePressEvent(self, event):
-        """处理螺丝点击 或 拖拽起始"""
+        """处理 角缩放 / 螺丝点击 / 拖拽"""
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position()
-            # 检查是否点击了功能螺丝
+            # 1. 角缩放优先（角落 30px 区域）
+            corner = self._corner_at(pos)
+            if corner is not None:
+                self._resize_corner = corner
+                self._resize_start = event.globalPosition().toPoint()
+                self._resize_geom = self.window().geometry()
+                self._resize_min = self.window().minimumSize()
+                self.grabMouse()
+                return
+            # 2. 功能螺丝（仅左上 + 和右上 ✕）
             if hasattr(self, '_screw_positions'):
-                for idx, (sx, sy) in enumerate(self._screw_positions):
+                r = int(10 * self.width() / 680)  # 缩放检测半径
+                for idx in (0, 1):
+                    sx, sy = self._screw_positions[idx]
                     dist = ((pos.x() - sx) ** 2 + (pos.y() - sy) ** 2) ** 0.5
-                    if dist <= 12:  # 点击半径稍大于视觉半径
-                        if idx == 0:    # 左上：打开文件夹
+                    if dist <= r:
+                        if idx == 0:
                             self._open_folder()
-                        elif idx == 1:  # 右上：关闭窗口
+                        else:
                             self.window().close()
                         return
-            # 否则开始拖拽
+            # 3. 拖拽移动
             self._drag_start = event.globalPosition().toPoint()
 
     def mouseMoveEvent(self, event):
-        """无边框窗口拖拽"""
-        if self._drag_start is not None and event.buttons() & Qt.MouseButton.LeftButton:
+        """角缩放 / 窗口拖拽"""
+        if hasattr(self, '_resize_corner') and self._resize_corner is not None:
+            delta = event.globalPosition().toPoint() - self._resize_start
+            g = self._resize_geom
+            mw, mh = self._resize_min.width(), self._resize_min.height()
+            x, y, w, h = g.x(), g.y(), g.width(), g.height()
+            c = self._resize_corner
+            if c in (0, 2):  # left
+                nx = g.x() + delta.x()
+                nw = g.width() - delta.x()
+                if nw >= mw:
+                    x = nx
+                    w = nw
+            if c in (1, 3):  # right
+                w = max(mw, g.width() + delta.x())
+            if c in (0, 1):  # top
+                ny = g.y() + delta.y()
+                nh = g.height() - delta.y()
+                if nh >= mh:
+                    y = ny
+                    h = nh
+            if c in (2, 3):  # bottom
+                h = max(mh, g.height() + delta.y())
+            self.window().setGeometry(x, y, w, h)
+        elif self._drag_start is not None and event.buttons() & Qt.MouseButton.LeftButton:
             delta = event.globalPosition().toPoint() - self._drag_start
             self.window().move(self.window().pos() + delta)
             self._drag_start = event.globalPosition().toPoint()
+        else:
+            c = self._corner_at(event.position())
+            if c in (0, 3):
+                self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+            elif c in (1, 2):
+                self.setCursor(Qt.CursorShape.SizeBDiagCursor)
+            else:
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def mouseReleaseEvent(self, event):
+        if hasattr(self, '_resize_corner') and self._resize_corner is not None:
+            self.releaseMouse()
+        self._resize_corner = None
+        self._drag_start = None
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Space:
@@ -580,7 +681,8 @@ class CassettePlayer(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setFixedSize(680, 520)
+        self.resize(680, 520)
+        self.setMinimumSize(500, 400)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent;")
