@@ -265,43 +265,63 @@ class CassettePlayer(QWidget):
         p.setPen(QPen(QColor(255, 255, 255, 30), 1))
         p.drawPath(path2)
 
-        # --- 标签区（凸起效果：阴影 + 顶部高光边） ---
+        # --- 标签区（梯形 + 凸起效果） ---
         label_y = margin + 10
         label_h = 64
-        label_rect = QRectF(margin + 26, label_y, bw - 52, label_h)
+        # 梯形：上宽下窄
+        slant = 10
+        tl_x = margin + 26        # 左上 x
+        tr_x = w - margin - 26     # 右上 x
+        bl_x = tl_x + slant        # 左下 x（内收）
+        br_x = tr_x - slant        # 右下 x（内收）
+        top_y = label_y
+        bottom_y = label_y + label_h
+        r = 8  # 圆角半径
 
-        # 底部阴影（标签投射在机身上的影子）
-        shadow_path = QPainterPath()
-        shadow_path.addRoundedRect(QRectF(label_rect.adjusted(0, 3, 0, 4)), 8, 8)
+        def _rounded_trapezoid(tlx, trx, blx, brx, ty, by, radius):
+            """创建圆角梯形路径"""
+            path = QPainterPath()
+            path.moveTo(tlx + radius, ty)
+            path.lineTo(trx - radius, ty)
+            path.arcTo(trx - 2 * radius, ty, 2 * radius, 2 * radius, 90, -90)
+            path.lineTo(brx, by - radius)
+            path.arcTo(brx - 2 * radius, by - 2 * radius, 2 * radius, 2 * radius, 0, -90)
+            path.lineTo(blx + radius, by)
+            path.arcTo(blx, by - 2 * radius, 2 * radius, 2 * radius, 270, -90)
+            path.lineTo(tlx, ty + radius)
+            path.arcTo(tlx, ty, 2 * radius, 2 * radius, 180, -90)
+            path.closeSubpath()
+            return path
+
+        # 底部阴影
+        shadow_path = _rounded_trapezoid(tl_x + 2, tr_x - 2, bl_x, br_x,
+                                         top_y + 3, bottom_y + 4, r)
         p.fillPath(shadow_path, QColor(0, 0, 0, 40))
 
         # 标签主体
-        label_path = QPainterPath()
-        label_path.addRoundedRect(label_rect, 8, 8)
+        label_path = _rounded_trapezoid(tl_x, tr_x, bl_x, br_x, top_y, bottom_y, r)
         p.fillPath(label_path, QColor(72, 64, 50, 160))
         p.setPen(QPen(QColor(180, 170, 140, 90), 1))
         p.drawPath(label_path)
 
-        # 顶部高光边（光打在凸起边缘）
-        highlight_rect = QRectF(label_rect.adjusted(2, 1, -2, -label_h + 6))
-        hl_path = QPainterPath()
-        hl_path.addRoundedRect(highlight_rect, 6, 6)
+        # 顶部高光边
+        hl_path = _rounded_trapezoid(tl_x + 2, tr_x - 2, bl_x + 4, br_x - 4,
+                                     top_y + 1, top_y + 8, 5)
         p.fillPath(hl_path, QColor(255, 255, 255, 35))
 
-        # 全局顶部高光（玻璃反光，精确匹配贴纸区域）
-        grad = QLinearGradient(0, label_y, 0, label_y + label_h)
+        # 全局玻璃反光（与梯形贴纸精确重合）
+        grad = QLinearGradient(0, top_y, 0, bottom_y)
         grad.setColorAt(0, QColor(255, 255, 255, 100))
         grad.setColorAt(0.3, QColor(255, 255, 255, 30))
         grad.setColorAt(1, QColor(255, 255, 255, 0))
-        hl_global = QPainterPath()
-        hl_global.addRoundedRect(label_rect, 8, 8)
+        hl_global = _rounded_trapezoid(tl_x, tr_x, bl_x, br_x, top_y, bottom_y, r)
         p.fillPath(hl_global, grad)
 
         # 标签横线
         p.setPen(QPen(QColor(200, 190, 160, 50), 1))
         for i in range(2):
-            ly = label_y + 22 + i * 20
-            p.drawLine(int(margin + 42), ly, int(w - margin - 42), ly)
+            ly = top_y + 22 + i * 20
+            p.drawLine(int(bl_x + 16), ly, int(br_x - 16), ly)
 
         # --- 磁带轮 ---
         reel_r = 44
