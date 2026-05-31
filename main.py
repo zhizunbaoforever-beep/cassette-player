@@ -70,6 +70,18 @@ class AudioEngine:
     def playlist(self):
         return self._playlist
 
+    def position(self):
+        """当前播放位置（毫秒）"""
+        return self._player.position()
+
+    def duration(self):
+        """当前歌曲总时长（毫秒）"""
+        return self._player.duration()
+
+    def seek(self, ms):
+        """跳转到指定毫秒位置"""
+        self._player.setPosition(ms)
+
     # ── 播放列表管理 ───────────────────────────
     def load_folder(self, folder_path):
         """递归扫描文件夹，收集支持的音频文件"""
@@ -159,11 +171,16 @@ class CassettePlayer(QWidget):
         self._bar_frame = 0                     # 动画帧计数
         self._hue_offset = 0.0                  # 色相偏移（流动彩虹）
         self._drag_start = None                 # 拖拽起始坐标
+        self._seeking = False                  # 是否正在拖拽进度条
 
         # ── 动画定时器：每 30ms 触发 _tick，约 33fps ──
         self._anim_timer = QTimer(self)
         self._anim_timer.timeout.connect(self._tick)
         self._anim_timer.start(30)
+
+        # ── 歌曲信息（由 paintEvent 绘制到标签区）──
+        self._track_title = "未播放"
+        self._track_artist = "请打开音乐文件夹"
 
         # ── 初始化 UI 并恢复上次播放状态 ──
         self._setup_ui()
@@ -171,55 +188,43 @@ class CassettePlayer(QWidget):
 
     # ── UI 初始化（只调用一次）──────────────────
     def _setup_ui(self):
-        self.setMinimumSize(500, 400)           # 窗口最小尺寸
+        self.setMinimumSize(500, 320)           # 窗口最小尺寸（磁带比例）
         self.setMouseTracking(True)             # 启用鼠标追踪（悬停光标变化）
         self.setStyleSheet("background: transparent;")  # 透明背景
 
-        # ── 歌曲信息标签（QLabel）───────────────
-        self.lbl_title = QLabel("未播放", self)  # 歌名标签
-        self.lbl_title.setStyleSheet(
-            "color: #fff; font-size: 18px; font-weight: bold; background: transparent;")
-        self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # 让鼠标事件穿透标签 → 到达 CassettePlayer（用于拖拽）
-        self.lbl_title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-
-        self.lbl_artist = QLabel("请打开音乐文件夹", self)  # 艺术家标签
-        self.lbl_artist.setStyleSheet(
-            "color: #aaa; font-size: 14px; background: transparent;")
-        self.lbl_artist.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_artist.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-
         # ── 三个控制按钮（QPushButton）──────────
-        # Qt 样式表（CSS 风格）：圆角、半透明、悬停高亮
+        # Qt 样式表：纯文字按钮，悬停时图标放大变亮
         btn_style = """
             QPushButton {
-                background: rgba(255,255,255,0.1);       /* 10% 白色半透明 */
-                color: #ddd;
-                border: 2px solid rgba(255,255,255,0.25);
-                border-radius: 24px;                     /* 圆形按钮 */
+                background: transparent;
+                color: #999;
+                border: none;
                 font-size: 22px;
                 min-width: 40px;
                 min-height: 40px;
             }
             QPushButton:hover {
-                background: rgba(255,255,255,0.25);      /* 悬停更亮 */
                 color: #fff;
-                border-color: rgba(255,255,255,0.5);
+                font-size: 26px;
             }
             QPushButton:pressed {
-                background: rgba(255,255,255,0.35);      /* 按下最亮 */
+                color: #ccc;
+                font-size: 21px;
             }
         """
-        self.btn_prev = QPushButton("⏮", self)   # 上一首
+        self.btn_prev = QPushButton("⏮", self)
         self.btn_prev.setStyleSheet(btn_style)
+        self.btn_prev.setFlat(True)                # 去掉按钮默认背景
         self.btn_prev.clicked.connect(self._prev)
 
-        self.btn_play = QPushButton("▶", self)    # 播放 / 暂停
+        self.btn_play = QPushButton("▶", self)
         self.btn_play.setStyleSheet(btn_style)
+        self.btn_play.setFlat(True)
         self.btn_play.clicked.connect(self._play_pause)
 
-        self.btn_next = QPushButton("⏭", self)    # 下一首
+        self.btn_next = QPushButton("⏭", self)
         self.btn_next.setStyleSheet(btn_style)
+        self.btn_next.setFlat(True)
         self.btn_next.clicked.connect(self._next)
 
         self._file_list = []  # 内部文件路径引用（备用）
@@ -244,31 +249,21 @@ class CassettePlayer(QWidget):
         self.btn_play.setGeometry(center_x - bw // 2, ry - bw // 2, bw, bw)
         self.btn_next.setGeometry(center_x + spacing - bw // 2, ry - bw // 2, bw, bw)
 
-        # ── 标签位置 & 字体大小 ──
-        lw = int(520 * s)
-        self.lbl_title.setGeometry(int(80 * s), int(96 * s), lw, int(28 * s))
-        self.lbl_title.setStyleSheet(
-            f"color: #fff; font-size: {max(10, int(16*s))}px; "
-            f"font-weight: bold; background: transparent;")
-        self.lbl_artist.setGeometry(int(80 * s), int(122 * s), lw, int(22 * s))
-        self.lbl_artist.setStyleSheet(
-            f"color: #aaa; font-size: {max(9, int(13*s))}px; "
-            f"background: transparent;")
-
     # ── 磁带轮中心 Y 坐标计算 ──────────────────
     def _reel_center_y(self):
-        """动态计算：在标签区和音浪区之间居中"""
+        """动态计算：在标签区和进度条+音浪区之间居中"""
         w = self.width()
-        s = w / 680                       # 缩放比
-        margin = int(18 * s)              # 磁带机身外边距
-        label_y = margin + int(8 * s)     # 标签区顶部
-        label_h = int(68 * s)             # 标签区高度
-        waveform_max_h = int(78 * s)      # 音浪最大高度
-        waveform_base_offset = int(6 * s) # 音浪底部间距
-        cassette_bottom = self.height() - margin    # 磁带机身底部
-        waveform_top = cassette_bottom - waveform_base_offset - waveform_max_h
-        # reel 中心 = 标签底部 → 音浪顶部 的中点
-        return label_y + label_h + (waveform_top - label_y - label_h) // 2
+        s = w / 680
+        margin = int(18 * s)
+        label_y = margin + int(8 * s)
+        label_h = int(68 * s)
+        waveform_max_h = int(78 * s)
+        waveform_base_offset = int(6 * s)
+        progress_space = int(14 * s)     # 进度条高度 + 间距
+        cassette_bottom = self.height() - margin
+        # reel 下方的可用空间顶部
+        content_bottom = cassette_bottom - waveform_base_offset - waveform_max_h - progress_space
+        return label_y + label_h + (content_bottom - label_y - label_h) // 2
 
     # ================================================================
     #  动画循环 — 每 30ms 执行一次
@@ -403,6 +398,26 @@ class CassettePlayer(QWidget):
             ly = top_y + 22 + i * 20
             p.drawLine(int(bl_x + 16), ly, int(br_x - 16), ly)
 
+        # ⑥ 绘制歌曲信息文字（融入标签区）
+        font_s = max(10, int(14 * s))              # 歌名字体大小
+        artist_font_s = max(8, int(11 * s))        # 艺术家字体大小
+        label_cx = (tl_x + tr_x) / 2               # 标签水平中心
+
+        # ── 歌名 ──
+        title_font = QFont("Microsoft YaHei", font_s)
+        title_font.setBold(True)
+        p.setFont(title_font)
+        p.setPen(QColor(240, 235, 220, 220))       # 暖白色
+        title_rect = QRectF(tl_x + 10, top_y + 4, tr_x - tl_x - 20, 24 * s)
+        p.drawText(title_rect, Qt.AlignmentFlag.AlignCenter, self._track_title)
+
+        # ── 艺术家 ──
+        artist_font = QFont("Microsoft YaHei", artist_font_s)
+        p.setFont(artist_font)
+        p.setPen(QColor(200, 190, 170, 180))       # 淡暖色
+        artist_rect = QRectF(tl_x + 10, top_y + 28 * s, tr_x - tl_x - 20, 20 * s)
+        p.drawText(artist_rect, Qt.AlignmentFlag.AlignCenter, self._track_artist)
+
         # ── 磁带轮（左右两个旋转轮盘）───────────
         reel_r = int(44 * s)                       # 轮盘半径
         reel_y = self._reel_center_y()              # 轮盘中心 Y
@@ -448,21 +463,83 @@ class CassettePlayer(QWidget):
                 p.drawLine(int(sx - d), int(sy), int(sx + d), int(sy))
                 p.drawLine(int(sx), int(sy - d), int(sx), int(sy + d))
 
-        # ── 频谱音浪（磁带机身内部底部）───────────
-        # 音浪水平范围 = 左轮左边缘 → 右轮右边缘
+        # ── 播放进度条（音浪上方）─────────────────
+        # 先算音浪水平跨度 & 垂直参数（进度条 & 音浪共用）
         wave_start_x = (w // 2 - reel_spacing) - reel_r
         wave_end_x = (w // 2 + reel_spacing) + reel_r
         wave_total_w = wave_end_x - wave_start_x
 
-        bar_count = min(60, len(self._bars))       # 实际柱子数（最多 60）
-        self._bar_count = bar_count
-        cell_w = wave_total_w / bar_count          # 每根柱子占的宽度（浮点，精确对齐）
-        bar_w = max(2.0, cell_w * 0.7)             # 柱宽 = 格宽 × 70%
-        bar_gap = cell_w - bar_w                   # 柱间距
+        waveform_max_h = int(78 * s)
+        waveform_base_offset = int(6 * s)
 
-        waveform_max_h = int(78 * s)               # 柱子最大高度
-        waveform_base_offset = int(6 * s)           # 底部留白（紧贴边缘）
-        base_y = cassette_bottom - waveform_base_offset  # 柱子基线 Y
+        dur = self.audio.duration()
+        pos_ms = self.audio.position()
+
+        # ── 进度条 Y 坐标 ────────────────────────
+        progress_y = cassette_bottom - waveform_base_offset - waveform_max_h - int(10 * s)
+
+        # ── 时间标签 ────────────────────────────
+        def _fmt(ms):
+            """毫秒 → MM:SS"""
+            if ms <= 0:
+                return "00:00"
+            sec = ms // 1000
+            return f"{sec // 60:02d}:{sec % 60:02d}"
+
+        time_font = QFont("Consolas", max(9, int(12 * s)))
+        p.setFont(time_font)
+        p.setPen(QColor(200, 200, 200, 160))
+        elapsed_text = _fmt(pos_ms)
+        remain_text = "-" + _fmt(max(0, dur - pos_ms))
+        # 左侧已播放时间
+        p.drawText(QRectF(wave_start_x - int(70 * s), progress_y - int(12 * s),
+                          int(65 * s), int(20 * s)),
+                   Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                   elapsed_text)
+        # 右侧剩余时间
+        p.drawText(QRectF(wave_end_x + int(5 * s), progress_y - int(12 * s),
+                          int(65 * s), int(20 * s)),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   remain_text)
+
+        # ── 进度条轨道 ──────────────────────────
+        progress_h = int(4 * s)
+        progress_rect = QRectF(wave_start_x, progress_y, wave_total_w, progress_h)
+        self._progress_rect = progress_rect
+
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(255, 255, 255, 30))
+        p.drawRoundedRect(progress_rect, 2, 2)
+
+        # 已播放部分
+        if dur > 0:
+            frac = min(pos_ms / dur, 1.0)
+            filled_w = int(progress_rect.width() * frac)
+            if filled_w > 0:
+                filled_rect = QRectF(progress_rect.x(), progress_rect.y(),
+                                     filled_w, progress_rect.height())
+                p.setBrush(QColor(220, 200, 150, 180))
+                p.drawRoundedRect(filled_rect, 2, 2)
+
+        # 进度滑块（爱心符号 ❤）
+        if dur > 0 and pos_ms >= 0:
+            dot_x = progress_rect.x() + progress_rect.width() * frac
+            dot_y = progress_rect.center().y()
+            heart_font = QFont("Segoe UI Emoji", max(8, int(11 * s)))
+            p.setFont(heart_font)
+            p.setPen(QColor(255, 100, 130, 240))
+            p.drawText(QRectF(dot_x - int(10 * s), dot_y - int(10 * s),
+                              int(20 * s), int(20 * s)),
+                       Qt.AlignmentFlag.AlignCenter, "❤")
+
+        # ── 频谱音浪（磁带机身内部底部）───────────
+        bar_count = min(60, len(self._bars))
+        self._bar_count = bar_count
+        cell_w = wave_total_w / bar_count
+        bar_w = max(2.0, cell_w * 0.7)
+        bar_gap = cell_w - bar_w
+
+        base_y = cassette_bottom - waveform_base_offset
         max_bar_h = waveform_max_h
 
         p.setPen(Qt.PenStyle.NoPen)                # 以下全部无边框
@@ -565,8 +642,8 @@ class CassettePlayer(QWidget):
                 self._update_track_info()               # 更新标签文字
                 self.btn_play.setText("⏸")              # 按钮 → 暂停图标
             else:
-                self.lbl_title.setText("未找到音乐文件")
-                self.lbl_artist.setText(folder)
+                self._track_title = "未找到音乐文件"
+                self._track_artist = folder
 
     def _play_pause(self):
         """播放/暂停切换。若无播放列表则先打开文件夹"""
@@ -599,8 +676,8 @@ class CassettePlayer(QWidget):
         if 0 <= self.audio.current_index < len(self.audio.playlist):
             path = self.audio.playlist[self.audio.current_index]
             meta = AudioEngine.get_metadata(path)    # 读取 ID3 标签
-            self.lbl_title.setText(meta['title'])
-            self.lbl_artist.setText(meta['artist'])
+            self._track_title = meta['title']
+            self._track_artist = meta['artist']
             self._save_state()                       # 自动保存状态
 
     def _save_state(self):
@@ -625,8 +702,8 @@ class CassettePlayer(QWidget):
                 self.btn_play.setText("⏸")
                 return
         # 恢复失败：显示默认提示
-        self.lbl_title.setText("未播放")
-        self.lbl_artist.setText("请打开音乐文件夹")
+        self._track_title = "未播放"
+        self._track_artist = "请打开音乐文件夹"
 
     # ================================================================
     #  鼠标 & 键盘事件
@@ -649,7 +726,17 @@ class CassettePlayer(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position()                   # 相对于本控件的坐标
 
-            # ① 功能螺丝（半径 14px 固定值）
+            # ① 进度条点击 / 拖动跳转
+            if hasattr(self, '_progress_rect') and self.audio.duration() > 0:
+                pr = self._progress_rect
+                if pr.contains(pos):
+                    self._seeking = True         # 进入拖拽模式
+                    frac = (pos.x() - pr.x()) / pr.width()
+                    frac = max(0.0, min(1.0, frac))
+                    self.audio.seek(int(self.audio.duration() * frac))
+                    return
+
+            # ② 功能螺丝（半径 14px 固定值）
             if hasattr(self, '_screw_positions'):
                 r = 14
                 for idx in (0, 1):                   # 只检查左上(+)和右上(✕)
@@ -676,7 +763,18 @@ class CassettePlayer(QWidget):
             self._drag_start = event.globalPosition().toPoint()
 
     def mouseMoveEvent(self, event):
-        """鼠标移动 → 缩放 / 拖拽 / 光标切换"""
+        """鼠标移动 → 进度条拖拽 / 缩放 / 窗口拖拽 / 光标切换"""
+        # ── 进度条拖拽中 ──
+        if (hasattr(self, '_seeking') and self._seeking
+                and event.buttons() & Qt.MouseButton.LeftButton):
+            if hasattr(self, '_progress_rect') and self.audio.duration() > 0:
+                pr = self._progress_rect
+                pos = event.position()
+                frac = (pos.x() - pr.x()) / pr.width()
+                frac = max(0.0, min(1.0, frac))
+                self.audio.seek(int(self.audio.duration() * frac))
+                return
+
         # ── 缩放中 ──
         if (hasattr(self, '_resize_corner') and self._resize_corner is not None
                 and event.buttons() & Qt.MouseButton.LeftButton):
@@ -712,16 +810,24 @@ class CassettePlayer(QWidget):
 
         # ── 悬停中（仅切换光标形状）──
         else:
-            c = self._corner_at(event.position())
-            if c in (0, 3):       # ↖↘ 对角线光标
-                self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-            elif c in (1, 2):     # ↗↙ 对角线光标
-                self.setCursor(Qt.CursorShape.SizeBDiagCursor)
-            else:                 # 普通箭头
-                self.setCursor(Qt.CursorShape.ArrowCursor)
+            pos = event.position()
+            # 进度条上显示手型光标
+            if (hasattr(self, '_progress_rect')
+                    and self._progress_rect.contains(pos)
+                    and self.audio.duration() > 0):
+                self.setCursor(Qt.CursorShape.PointingHandCursor)
+            else:
+                c = self._corner_at(pos)
+                if c in (0, 3):
+                    self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+                elif c in (1, 2):
+                    self.setCursor(Qt.CursorShape.SizeBDiagCursor)
+                else:
+                    self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def mouseReleaseEvent(self, event):
-        """鼠标释放 → 清除缩放/拖拽状态"""
+        """鼠标释放 → 清除所有拖拽状态"""
+        self._seeking = False
         self._resize_corner = None
         self._drag_start = None
 
@@ -751,8 +857,8 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.resize(680, 520)              # 初始窗口尺寸
-        self.setMinimumSize(500, 400)      # 最小尺寸（防止缩太小）
+        self.resize(680, 420)              # 初始窗口尺寸（磁带比例）
+        self.setMinimumSize(500, 320)      # 最小尺寸
 
         # FramelessWindowHint：去掉系统标题栏和边框 → 磁带形状即窗口
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
