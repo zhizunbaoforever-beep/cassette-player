@@ -193,61 +193,16 @@ class CassettePlayer(QWidget):
         self.setStyleSheet("background: transparent;")  # 透明背景
 
         # ── 三个控制按钮（QPushButton）──────────
-        # Qt 样式表：纯文字按钮，悬停时图标放大变亮
-        btn_style = """
-            QPushButton {
-                background: transparent;
-                color: #999;
-                border: none;
-                font-size: 22px;
-                min-width: 40px;
-                min-height: 40px;
-            }
-            QPushButton:hover {
-                color: #fff;
-                font-size: 26px;
-            }
-            QPushButton:pressed {
-                color: #ccc;
-                font-size: 21px;
-            }
-        """
-        self.btn_prev = QPushButton("⏮", self)
-        self.btn_prev.setStyleSheet(btn_style)
-        self.btn_prev.setFlat(True)                # 去掉按钮默认背景
-        self.btn_prev.clicked.connect(self._prev)
-
-        self.btn_play = QPushButton("▶", self)
-        self.btn_play.setStyleSheet(btn_style)
-        self.btn_play.setFlat(True)
-        self.btn_play.clicked.connect(self._play_pause)
-
-        self.btn_next = QPushButton("⏭", self)
-        self.btn_next.setStyleSheet(btn_style)
-        self.btn_next.setFlat(True)
-        self.btn_next.clicked.connect(self._next)
-
-        self._file_list = []  # 内部文件路径引用（备用）
+        # 按钮由 paintEvent 手绘（避免原生样式干扰）
+        self._btn_play_text = "▶"         # 播放按钮文字（▶ / ⏸）
+        self._btn_regions = []            # [(rect, action), ...] → 点击检测
+        self._btn_hover = -1              # 当前悬停按钮索引（-1 = 无）
+        self._file_list = []
 
     # ── 窗口缩放时重新布局 ─────────────────────
     def resizeEvent(self, event):
-        """窗口大小改变时，按比例重排按钮和标签位置"""
+        """窗口缩放时触发重绘"""
         super().resizeEvent(event)
-        w, h = self.width(), self.height()
-        base_w = 680                        # 设计基准宽度
-        s = w / base_w                      # 当前缩放比（1.0 = 原始大小）
-        btn_s = int(48 * s)                 # 按钮尺寸（按比例缩放）
-        reel_s = int(170 * s)               # 磁带轮中心间距
-
-        # ── 按钮位置：Y 对齐磁带轮中心 ──
-        ry = self._reel_center_y()          # 动态计算 reel Y 坐标
-        bw = btn_s                          # 按钮宽 = 高（正方形）
-        spacing = int(reel_s * 0.50)        # 按钮距中心距离 = reel 间距 × 50%
-        center_x = w // 2                   # 窗口水平中心
-        # setGeometry(x, y, w, h)：绝对定位
-        self.btn_prev.setGeometry(center_x - spacing - bw // 2, ry - bw // 2, bw, bw)
-        self.btn_play.setGeometry(center_x - bw // 2, ry - bw // 2, bw, bw)
-        self.btn_next.setGeometry(center_x + spacing - bw // 2, ry - bw // 2, bw, bw)
 
     # ── 磁带轮中心 Y 坐标计算 ──────────────────
     def _reel_center_y(self):
@@ -426,6 +381,32 @@ class CassettePlayer(QWidget):
         r2_x = w // 2 + reel_spacing               # 右轮 X
         for cx in [r1_x, r2_x]:
             self._draw_reel(p, cx, reel_y, reel_r)
+
+        # ── 手绘控制按钮（⏮ ▶/⏸ ⏭）──────────────
+        btn_s = int(44 * s)
+        btn_spacing = int(reel_spacing * 0.50)
+        center_x = w // 2
+        btn_y = reel_y - btn_s // 2
+        btn_font = QFont("Segoe UI Symbol", max(10, int(20 * s)))
+        p.setFont(btn_font)
+
+        # 三组按钮位置 (x, y, w, symbol)
+        btns = [
+            (center_x - btn_spacing - btn_s // 2, btn_y, btn_s, "⏮"),   # 上一首
+            (center_x - btn_s // 2, btn_y, btn_s, self._btn_play_text),  # 播放/暂停
+            (center_x + btn_spacing - btn_s // 2, btn_y, btn_s, "⏭"),   # 下一首
+        ]
+        self._btn_regions = []  # 重建点击区域
+        for i, (bx, by_, bs, sym) in enumerate(btns):
+            rect = QRectF(bx, by_, bs, bs)
+            self._btn_regions.append(rect)
+            # 悬停高亮
+            hovered = (self._btn_hover == i)
+            if hovered:
+                p.setPen(QColor(255, 255, 255, 255))
+            else:
+                p.setPen(QColor(180, 180, 180, 180))
+            p.drawText(rect, Qt.AlignmentFlag.AlignCenter, sym)
 
         # ── 四角螺丝 ────────────────────────────
         screw_r = int(7 * s)                       # 螺丝外圈半径
@@ -640,7 +621,8 @@ class CassettePlayer(QWidget):
                 self._file_list = self.audio.playlist  # 缓存播放列表引用
                 self.audio.play_index(0)                # 播放第一首
                 self._update_track_info()               # 更新标签文字
-                self.btn_play.setText("⏸")              # 按钮 → 暂停图标
+                self._btn_play_text = "⏸"
+                self.update()
             else:
                 self._track_title = "未找到音乐文件"
                 self._track_artist = folder
@@ -655,21 +637,24 @@ class CassettePlayer(QWidget):
             self._update_track_info()
         else:
             self.audio.toggle()                      # 播放 ↔ 暂停
-        self.btn_play.setText("⏸" if self.audio.playing else "▶")
+        self._btn_play_text = "⏸" if self.audio.playing else "▶"
+        self.update()
 
     def _next(self):
         """下一首"""
         if self.audio.playlist:
             self.audio.next()
             self._update_track_info()
-            self.btn_play.setText("⏸")
+            self._btn_play_text = "⏸"
+            self.update()
 
     def _prev(self):
         """上一首"""
         if self.audio.playlist:
             self.audio.prev()
             self._update_track_info()
-            self.btn_play.setText("⏸")
+            self._btn_play_text = "⏸"
+            self.update()
 
     def _update_track_info(self):
         """根据当前索引更新歌名和艺术家标签"""
@@ -699,7 +684,8 @@ class CassettePlayer(QWidget):
                     last_index = 0
                 self.audio.play_index(last_index)
                 self._update_track_info()
-                self.btn_play.setText("⏸")
+                self._btn_play_text = "⏸"
+                self.update()
                 return
         # 恢复失败：显示默认提示
         self._track_title = "未播放"
@@ -726,7 +712,19 @@ class CassettePlayer(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position()                   # 相对于本控件的坐标
 
-            # ① 进度条点击 / 拖动跳转
+            # ① 手绘按钮点击
+            if hasattr(self, '_btn_regions'):
+                for i, r in enumerate(self._btn_regions):
+                    if r.contains(pos):
+                        if i == 0:
+                            self._prev()
+                        elif i == 1:
+                            self._play_pause()
+                        elif i == 2:
+                            self._next()
+                        return
+
+            # ② 进度条点击 / 拖动跳转
             if hasattr(self, '_progress_rect') and self.audio.duration() > 0:
                 pr = self._progress_rect
                 if pr.contains(pos):
@@ -811,10 +809,23 @@ class CassettePlayer(QWidget):
         # ── 悬停中（仅切换光标形状）──
         else:
             pos = event.position()
+            # 按钮 hover 检测
+            hover_changed = False
+            if hasattr(self, '_btn_regions'):
+                new_hover = -1
+                for i, r in enumerate(self._btn_regions):
+                    if r.contains(pos):
+                        new_hover = i
+                        break
+                if new_hover != self._btn_hover:
+                    self._btn_hover = new_hover
+                    hover_changed = True
             # 进度条上显示手型光标
             if (hasattr(self, '_progress_rect')
                     and self._progress_rect.contains(pos)
                     and self.audio.duration() > 0):
+                self.setCursor(Qt.CursorShape.PointingHandCursor)
+            elif hasattr(self, '_btn_regions') and self._btn_hover >= 0:
                 self.setCursor(Qt.CursorShape.PointingHandCursor)
             else:
                 c = self._corner_at(pos)
@@ -824,6 +835,8 @@ class CassettePlayer(QWidget):
                     self.setCursor(Qt.CursorShape.SizeBDiagCursor)
                 else:
                     self.setCursor(Qt.CursorShape.ArrowCursor)
+            if hover_changed:
+                self.update()  # 重绘以显示/隐藏 hover 效果
 
     def mouseReleaseEvent(self, event):
         """鼠标释放 → 清除所有拖拽状态"""
